@@ -68,9 +68,20 @@ README.md             — this file
 assets/banner.png     — the 8-bit banner
 docs/MODEL.md         — the Oracle: what it is + the claims (not the training method)
 docs/GAME_ENGINE.md   — the substrate-paradigm engine architecture
+engine/               — the game-engine source (TypeScript): the HRR world
+                        substrate, command bus, agents, projection, and the
+                        EnsouledWorld runner. This is the engine, not the
+                        Oracle's training pipeline.
 CREDITS.md            — who built it
 LICENSE               — MIT
 ```
+
+> **Note on scope.** This repo publishes the *engine* and an honest account of
+> *what the Oracle is and claims*. It does **not** publish the Oracle's training
+> method — how the holon substrate is composed from a corpus. The model that
+> answers at [wanderaround.io/oracle](https://wanderaround.io/oracle) and breathes
+> through EnsouledWorld is the live article; this is its description, its claims,
+> and the world built around it.
 
 ## Credits
 
