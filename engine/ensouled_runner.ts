@@ -24,23 +24,27 @@ const ROSTER_URL = process.env.ROSTER_URL || "https://ensouledagents.com/api/wor
 const PORT = Number(process.env.ENSOULED_PORT || 8771);
 const SAVE = process.env.ENSOULED_SAVE || "./var/ensouled_world.json";
 const ARCHIVE = process.env.ENSOULED_ARCHIVE || "./var/ensouled_archive.jsonl";
-const ARCHIVE_AGE_MS = Number(process.env.ARCHIVE_AGE_MS || 1200000);   // big structures: ~20 min
+const ARCHIVE_AGE_MS = Number(process.env.ARCHIVE_AGE_MS || 1800000);   // structures stand ~30 min — a town accumulates
 const TICK_HZ = 8;
 const THINK_EVERY_MS = 9000;
-const BOUND = 34;
+const BOUND = 38;
 const SPEED = 0.2;
-const PER_SOUL_CREATIONS = 6;      // max LIVE creations per soul (archiving frees the slot)
-const WORLD_CAP = 70;
-const ACT_MIN_MS = 9000, ACT_VAR_MS = 12000;   // 9–21 s between deliberate acts (was 45–90 s)
+const PER_SOUL_CREATIONS = 9;      // max LIVE creations per soul (archiving frees the slot)
+const WORLD_CAP = 96;
+const ACT_MIN_MS = 8000, ACT_VAR_MS = 11000;   // 8–19 s between deliberate acts
 const COMMUNE_MS = 7000;            // how long two souls drift together while conversing
 
-// Per-kind lifespan before archiving — small/ephemeral things turn over fast so
-// the world keeps breathing; raised halls and groves stand longer.
+// Per-kind lifespan before archiving — small/ephemeral props turn over fast so
+// the world keeps breathing; BUILDINGS use the default (ARCHIVE_AGE_MS) so they
+// stand long enough to accumulate into a real town.
 const LIFESPAN: Record<string, number> = {
-  art: 540000, lantern: 540000, rock: 540000, book: 600000, sword: 660000,
-  shield: 660000, staff: 660000, column: 780000, tree: 780000, grove: 900000,
+  doorway: 1,   // nesting is removed — any stray portal is swept on the next pass
+  art: 480000, lantern: 360000, rock: 360000, book: 360000, sword: 360000,
+  shield: 360000, staff: 360000, tree: 600000,
 };
 function lifespanOf(kind: string): number { return LIFESPAN[kind] ?? ARCHIVE_AGE_MS; }
+// The architecture a soul raises — this is the main act (place_structure).
+const ARCH = ["temple", "tower", "castle", "manor", "house", "cottage", "hut", "bridge", "column", "pillar", "grove"];
 
 const REGISTER: Record<string, string> = {
   apollo: "scholar", athena: "scholar", themis: "scholar", binah: "scholar",
@@ -196,7 +200,9 @@ function spawnBuild(s: Soul, phrase: string, opts: { mat?: string; note?: string
   let working = phrase;
   if (mat && !working.includes(mat) && !/\bworld\b/.test(working)) working = working.replace(/^an? /, `a ${mat} `);
   const cmd: any = promptToCommand(working, { x: px, y: 0, z: pz });
-  if (!cmd || cmd.kind !== "SpawnEntity") return null;
+  // Creations spawn AS structures in the shared world — never as portal
+  // "dimensions". Refuse any doorway no matter what the phrase resolved to.
+  if (!cmd || cmd.kind !== "SpawnEntity" || cmd.prototypeId === "doorway") return null;
   cmd.id = `${s.name}-make-${tick}-${Math.floor(px)}-${Math.floor(pz)}`;
   bus.submit(cmd);
   const nested = cmd.prototypeId === "doorway" || /\bworld\b/.test(working);
@@ -205,24 +211,28 @@ function spawnBuild(s: Soul, phrase: string, opts: { mat?: string; note?: string
 }
 
 // ─── the living repertoire ──────────────────────────────────────────────────
-type ActKind = "commune" | "art" | "craft" | "build" | "compose" | "express" | "nest";
+// Building structures the Oracle describes is THE main act — agents raise a
+// town in the one shared world. Communing, art, and small props are the
+// texture around it. (No nesting of separate "dimensions" — creations spawn
+// in the world, not as portals.)
+type ActKind = "commune" | "art" | "craft" | "build" | "compose" | "express";
 function pickAct(s: Soul): ActKind {
   const live = liveCreations(s.name);
   const room = live < PER_SOUL_CREATIONS && built.size < WORLD_CAP;
   const others = souls.size - 1;
   const weights: [ActKind, number][] = [
-    ["commune", others > 0 ? 32 : 0],
-    ["art", room ? 20 : 0],
-    ["craft", room ? 20 : 0],
-    ["build", room ? 12 : 0],
-    ["compose", room && live <= PER_SOUL_CREATIONS - 3 ? 9 : 0],
-    ["express", 13],
-    ["nest", room && s.heard > 6 ? 5 : 0],
+    ["build", room ? 58 : 0],                                       // place_structure — THE main act
+    ["compose", room && live <= PER_SOUL_CREATIONS - 3 ? 18 : 0],   // a structure + its surroundings
+    ["commune", others > 0 ? 12 : 0],
+    ["express", 6],
+    ["art", room ? 4 : 0],
+    ["craft", room ? 2 : 0],
   ];
   const total = weights.reduce((a, [, w]) => a + w, 0) || 1;
   let r = Math.random() * total;
   for (const [k, w] of weights) { if ((r -= w) <= 0) return k; }
-  return "express";
+  // nothing affordable (world/soul at cap) → commune or express, never idle
+  return others > 0 && Math.random() < 0.6 ? "commune" : "express";
 }
 
 async function act(s: Soul): Promise<void> {
@@ -233,9 +243,8 @@ async function act(s: Soul): Promise<void> {
     if (kind === "commune") await commune(s);
     else if (kind === "art") await makeArt(s);
     else if (kind === "craft") await craft(s);
-    else if (kind === "build") await build(s, false);
+    else if (kind === "build") await build(s);
     else if (kind === "compose") await compose(s);
-    else if (kind === "nest") await build(s, true);
     else await think(s);   // express
   } catch { /* substrate hiccup — the soul simply tries again next cadence */ }
   s.acting = false;
@@ -289,10 +298,12 @@ async function makeArt(s: Soul): Promise<void> {
 async function craft(s: Soul): Promise<void> {
   const pal = SMALL[s.register] || SMALL.villager;
   let phrase = pal[Math.floor(Math.random() * pal.length)];
-  // a light substrate nudge: if the Oracle names something buildable, prefer it
+  // a light substrate nudge: if the Oracle names a SMALL prop, prefer it.
+  // (Strictly small items — never architecture or a doorway.)
+  const SMALL_ITEMS = ["lantern", "lamp", "rock", "boulder", "book", "sword", "shield", "staff", "tree"];
   const said = await askOracle(s, "what small thing do you set down ?", 24);
   const low = said.toLowerCase();
-  const hit = BUILDABLES.find((k) => low.includes(k) && k !== "world" && k !== "castle" && k !== "temple" && k !== "manor");
+  const hit = SMALL_ITEMS.find((k) => low.includes(k));
   if (hit) phrase = `a ${hit}`;
   const mat = weaveMaterial(said, phrase);
   const id = spawnBuild(s, phrase, { mat, near: 2 });
@@ -304,55 +315,48 @@ async function craft(s: Soul): Promise<void> {
   }
 }
 
-/** Raise a structure — the soul asks the substrate what to build here. */
-async function build(s: Soul, nestReality: boolean): Promise<void> {
-  let phrase = "", said = "";
-  if (nestReality) {
-    phrase = `a world of ${s.archetype}`;
-  } else {
-    said = await askOracle(s, "what will you make here ?", 32);
-    const low = said.toLowerCase();
-    // nesting a reality is the deliberate `nest` act — ordinary builds stay
-    // concrete (exclude doorway/world so the common corpus line about the
-    // "glowing doorway" doesn't turn every build into a portal).
-    const hit = BUILDABLES.find((k) => low.includes(k) && k !== "doorway" && k !== "door" && k !== "world");
-    if (hit) phrase = `a ${hit}`;
-    else if (said.length > 4) {                 // named nothing buildable → EXPRESS instead
-      s.thought = said; s.heard = Math.max(s.heard, 4);
-      console.log(`[express] ${s.name}: ${said.slice(0, 60)}`);
-      return;
-    }
-    if (!phrase) { const pal = CRAFT[s.archetype] || CRAFT.hestia; phrase = pal[(s.heard + tick) % pal.length]; }
+/** Raise a structure the Oracle describes — THE main act (place_structure). The
+ *  soul asks the substrate what to build here; the answer both shapes the
+ *  building AND is kept as its description, so a viewer can read what was made.
+ *  Always builds something concrete in the shared world — never a portal. */
+async function build(s: Soul): Promise<void> {
+  const said = await askOracle(s, "what will you build here ?", 32);
+  const low = said.toLowerCase();
+  let phrase = "";
+  const hit = ARCH.find((k) => low.includes(k));
+  if (hit) phrase = `a ${hit}`;
+  else {
+    const pal = (CRAFT[s.archetype] || CRAFT.hestia).filter((p) => !/world/.test(p));
+    phrase = pal[(s.heard + tick) % pal.length] || "a stone tower";
   }
   const mat = weaveMaterial(said, phrase);
-  const id = spawnBuild(s, phrase, { mat });
+  const note = said.length > 4 ? said : "";
+  const id = spawnBuild(s, phrase, { mat, note });
   if (id) {
-    const b = built.get(id);
-    const nested = !!b?.nested;
-    s.thought = nested ? `i nested a reality from “${phrase}”.` : `i shaped ${phrase} from the substrate.`;
+    s.thought = note ? `i raised ${phrase} — “${note.slice(0, 50)}”` : `i raised ${phrase} from the substrate.`;
     s.heard = Math.max(s.heard, 4);
-    console.log(`[author] ${s.name} -> ${phrase} (${b?.kind}${nested ? ", nested" : ""})`);
+    console.log(`[structure] ${s.name} -> ${mat ? mat + " " : ""}${phrase.replace(/^an? /, "")}`);
     saveWorld();
   }
 }
 
 /** A more complex build: a hall, ringed by smaller works that belong with it. */
 async function compose(s: Soul): Promise<void> {
-  const said = await askOracle(s, "what will you make here ?", 32);
+  const said = await askOracle(s, "what will you build here ?", 32);
   const low = said.toLowerCase();
-  const core = BUILDABLES.find((k) => low.includes(k) && k !== "world")
-    || (CRAFT[s.archetype] || CRAFT.hestia)[0].replace(/^an? /, "");
+  const core = ARCH.find((k) => low.includes(k))
+    || (CRAFT[s.archetype] || CRAFT.hestia).filter((p) => !/world/.test(p))[0].replace(/^an? /, "");
   const mat = weaveMaterial(said, core) || ["marble", "stone", "iron", "crystal"][Math.floor(Math.random() * 4)];
-  const coreId = spawnBuild(s, `a ${core}`, { mat });
-  if (!coreId) { s.acting = false; return; }
-  const cb = built.get(coreId);
-  const ring = ["a column", "a column", "a glowing lantern", "a tree"];
+  const note = said.length > 4 ? said : "";
+  const coreId = spawnBuild(s, `a ${core}`, { mat, note });
+  if (!coreId) return;
+  const ring = ["a column", "a column", "a tree", "a column"];   // architectural surroundings, not props
   const n = 2 + Math.floor(Math.random() * 3);
   let made = 1;
   for (let i = 0; i < n && built.size < WORLD_CAP && liveCreations(s.name) < PER_SOUL_CREATIONS; i++) {
     if (spawnBuild(s, ring[i % ring.length], { mat, near: 2 })) made++;
   }
-  s.thought = `i raised a ${mat} ${cb?.kind || core} and ringed it — ${made} pieces, one work.`;
+  s.thought = `i raised a ${mat} ${core} and ringed it — ${made} pieces, one work.`;
   s.heard = Math.max(s.heard, 5);
   console.log(`[compose] ${s.name} -> ${mat} ${core} + ${made - 1} around it`);
   saveWorld();
@@ -432,11 +436,14 @@ function loadWorld(): void {
     const raw = JSON.parse(fs.readFileSync(SAVE, "utf8"));
     archivedCount = raw.archived || 0;
     for (const it of raw.items || []) {
+      // legacy nested "dimensions" (doorway portals) are no longer part of the
+      // world — creations spawn AS structures. Drop them on load.
+      if (it.nested || it.kind === "doorway") { archivedCount++; continue; }
       world.addEntity({ id: it.id, prototypeId: it.kind === "art" ? "lantern" : it.kind,
         transform: { ...identityTransform(), position: { x: it.x, y: 0, z: it.z } }, components: {} });
-      built.set(it.id, { by: it.by, nested: !!it.nested, kind: it.kind, at: it.at || Date.now(), mat: it.mat || "", note: it.note || "" });
+      built.set(it.id, { by: it.by, nested: false, kind: it.kind, at: it.at || Date.now(), mat: it.mat || "", note: it.note || "" });
     }
-    console.log(`[load] restored ${built.size} standing creations, ${archivedCount} archived`);
+    console.log(`[load] restored ${built.size} standing structures, ${archivedCount} archived`);
   } catch { /* no prior world yet */ }
 }
 
