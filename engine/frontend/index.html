@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wander Around — beta</title>
+  <link rel="stylesheet" href="/src/ui/styles.css">
+</head>
+<body>
+  <canvas id="game-canvas"></canvas>
+
+  <!-- HUD overlays. Visibility toggled by JS. -->
+  <div id="hud">
+    <div id="title-overlay" class="overlay overlay-center">
+      <h1>Wander Around</h1>
+      <p class="subtitle">you describe it — you walk into it</p>
+      <p class="hint">WASD move · mouse look · Space jump · E interact · / commands · M map · H help</p>
+      <button id="title-start">enter</button>
+    </div>
+
+    <div id="hud-top-left">
+      <div id="fps-counter" class="hud-line">fps —</div>
+      <div id="style-indicator" class="hud-line">style: 3d</div>
+      <div id="oracle-status" class="hud-line">oracle: offline</div>
+    </div>
+
+    <!-- Current Objective banner (mission chain) -->
+    <div id="objective-banner" class="hidden">
+      <div id="objective-label">Current Objective</div>
+      <div id="objective-title"></div>
+      <div id="objective-hint"></div>
+      <div id="objective-progress"></div>
+    </div>
+
+    <!-- Transient toast (mission rewards / completions) -->
+    <div id="toast" class="hidden"></div>
+
+    <div id="hud-bottom-center">
+      <div id="slash-bar" class="hidden">
+        <input id="slash-input" type="text" placeholder="/help or /spawn an iron sword or /style paper-mario" autocomplete="off">
+      </div>
+      <div id="slash-output" class="hidden"></div>
+    </div>
+
+    <div id="hud-right" class="hidden">
+      <div id="quest-panel" class="panel hidden">
+        <h3>Quests</h3>
+        <ul id="quest-list"></ul>
+      </div>
+      <div id="workshop-panel" class="panel hidden">
+        <h3>Workshop</h3>
+        <div id="workshop-body"></div>
+      </div>
+    </div>
+
+    <div id="help-overlay" class="overlay hidden">
+      <h2>Help</h2>
+      <div id="help-body"></div>
+      <button id="help-close">close (H)</button>
+    </div>
+
+    <div id="tutorial-overlay" class="overlay-bottom hidden">
+      <div id="tutorial-text"></div>
+      <button id="tutorial-next">next</button>
+    </div>
+
+    <div id="hud-bottom-right">
+      <button id="btn-help">H</button>
+      <button id="btn-quests">Q</button>
+      <button id="btn-workshop">W</button>
+      <button id="btn-map">M</button>
+      <button id="btn-perf">perf</button>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

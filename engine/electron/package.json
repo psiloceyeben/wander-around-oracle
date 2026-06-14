@@ -1,0 +1,45 @@
+{
+  "name": "wander-around",
+  "productName": "Wander Around",
+  "version": "0.1.0-beta.1",
+  "description": "Wander Around — compose your world.",
+  "homepage": "https://prometheus7.com/",
+  "author": {
+    "name": "Prometheus7 / Ben Horn",
+    "email": "ben@prometheus7.com"
+  },
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.prometheus7.wanderaround",
+    "productName": "Wander Around",
+    "directories": { "output": "build" },
+    "files": [
+      "main.js",
+      "preload.js",
+      "icon.png",
+      "../frontend/dist/**/*"
+    ],
+    "extraResources": [
+      { "from": "../frontend/dist", "to": "frontend-dist" }
+    ],
+    "win": { "target": ["nsis", "portable"], "icon": "icon.png" },
+    "mac": { "target": ["dmg"], "icon": "icon.png", "category": "public.app-category.games" },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "icon": "icon.png",
+      "category": "Game",
+      "maintainer": "ben@prometheus7.com"
+    }
+  }
+}

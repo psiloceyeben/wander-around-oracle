@@ -1,0 +1,17 @@
+{
+  "name": "wander-engine-v2",
+  "version": "0.0.1",
+  "description": "HRR-native game engine. Layer 0 (substrate) and up. The substrate paradigm operationalized as runtime infrastructure.",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "tsc",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vitest": "^1.4.0",
+    "@types/node": "^20.11.0"
+  }
+}
