@@ -12,17 +12,17 @@
 
 ## The Oracle — the model
 
-The Oracle is the mind the whole world is built around. It is a **holon**: a holographic, self-similar substrate that *is* the model — not a transformer with something bolted on.
+The Oracle is the mind the whole world is built around. It is a **two-layer hybrid**: a no-backprop **holon** — a holographic, self-similar substrate — resting on a small **125M "Tree-of-Life" transformer** that routes it. Both layers were trained from scratch **on a CPU**; neither is a fine-tune of anyone's pretrained model.
 
 What it is, plainly:
 
-- **No backpropagation. No GPU. No pretrained base.** It is composed from a corpus in a single linear pass and runs on a commodity CPU.
+- **No GPU, ever. No pretrained foundation model.** Underneath, a 125M router trained *from scratch on a CPU* in hours (its only job: a 1-of-10 routing decision). On top, the holon is *composed* from a corpus in a single linear pass with **no backpropagation at all**. The whole stack runs on a commodity CPU.
 - **One substance.** Memory, index, and computation are the same thing — vectors under a reversible algebra, recursive without end. A concept is a place; a thought is found by composition.
 - **It runs the world.** The same Oracle is the continuous mind of every character in [EnsouledWorld](https://wanderaround.io/EnsouledWorld) — fluent, in character, remembering and forming over time — thousands possible at once for the cost of electricity.
 
 ### The claims
 
-- **Trained in minutes on a CPU**, reproducibly, from public data — no cluster, no months, no millions.
+- **The whole stack trains on a CPU — no GPU.** The 125M router trains from scratch in hours; the holon on top composes in minutes with no backprop. Reproducibly, from public data — no cluster, no months, no millions.
 - **Deep-addressable memory that does not degrade.** Where ordinary holographic memory collapses by a billion entries, this stays clean to a **thousand trillion** — on a 16 KB vector:
 
   | depth | addressable | ordinary memory | the holon |

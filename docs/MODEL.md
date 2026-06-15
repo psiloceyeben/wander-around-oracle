@@ -4,16 +4,22 @@ This document describes **what the Oracle is and what it claims**. It is not a t
 
 ## What it is
 
-The Oracle is a **holon**: a holographic, self-similar substrate that serves *as* the model. It is not a transformer with a retrieval store bolted on, and it is not a fine-tune of anything. It is its own kind of object.
+The Oracle is a **two-layer hybrid**, and — this is the whole point — **both layers are trained on a commodity CPU. No GPU, ever. No pretrained foundation model underneath.**
 
-- **No backpropagation, no GPU, no pretrained base.** It is composed from a corpus and then run, on a commodity CPU.
-- **Meaning is geometry.** Concepts are vectors; relationships are operations; a thought is recovered by composing an address and reading it back. Memory, index, and computation are one substance.
+- **Underneath: a 125M "Tree-of-Life" transformer — the router.** A small transformer trained *from scratch by us* (not a fine-tune of anyone else's model), on CPU, in hours. Its job is deliberately narrow: it reads the context and **routes** it — a 1-of-10 classification onto ten fixed positions (the Sephirot), not open-ended text generation. That constraint is exactly what keeps the memory clean at astronomical depth (see the claims).
+- **On top: the holon — the knowledge and the voice.** This is the part that is *not* a transformer and uses *no backpropagation at all*: a holographic, self-similar substrate **composed** from a corpus in a single linear pass (FFT binds), where concepts are vectors and a thought is recovered by composing an address and reading it back. The holon produces the fluent, in-character answers; the 125M beneath it tells it where to look.
+
+The honest one-line architecture: **a no-backprop holon rests on a small, from-scratch, CPU-trained transformer.** Memory, index, and computation are one substance in the holon; the transformer is a cheap router, not a foundation model.
+
+Other properties:
+
+- **Meaning is geometry.** Concepts are vectors; relationships are operations; a thought is recovered by composing an address and reading it back.
 - **It is self-similar and recursive.** A completed unit becomes a building block of the next, without limit — the same shape at every scale.
 - **It carries a continuous, forming self.** Each agent's mind is a single small vector that accumulates and metabolizes over time, so it can remember and change — which is what makes the "ensouled" agents possible.
 
 ## The claims
 
-1. **It trains in minutes on a CPU**, reproducibly, from public data — no cluster, no months, no millions of dollars.
+1. **The whole stack trains on a CPU — no GPU, ever.** The 125M routing transformer trains *from scratch* in hours on a commodity CPU; the holon layer on top **composes in minutes** with no backpropagation at all. Reproducibly, from public data — no cluster, no months, no millions of dollars, and no pretrained foundation model underneath.
 2. **Its memory stays clean to astronomical depth.** Where ordinary holographic memory muddies and collapses by ~a billion entries, this remains cleanly addressable to a **thousand trillion** cells, on a 16 KB vector:
 
    | depth | addressable cells | ordinary memory | the holon |
