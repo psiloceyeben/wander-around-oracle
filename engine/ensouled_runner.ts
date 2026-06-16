@@ -24,13 +24,13 @@ const ROSTER_URL = process.env.ROSTER_URL || "https://ensouledagents.com/api/wor
 const PORT = Number(process.env.ENSOULED_PORT || 8771);
 const SAVE = process.env.ENSOULED_SAVE || "./var/ensouled_world.json";
 const ARCHIVE = process.env.ENSOULED_ARCHIVE || "./var/ensouled_archive.jsonl";
-const ARCHIVE_AGE_MS = Number(process.env.ARCHIVE_AGE_MS || 1800000);   // structures stand ~30 min — a town accumulates
+const ARCHIVE_AGE_MS = Number(process.env.ARCHIVE_AGE_MS || 2700000);   // structures stand ~45 min — a sprawling town accumulates
 const TICK_HZ = 8;
 const THINK_EVERY_MS = 9000;
-const BOUND = 38;
-const SPEED = 0.2;
-const PER_SOUL_CREATIONS = 9;      // max LIVE creations per soul (archiving frees the slot)
-const WORLD_CAP = 96;
+const BOUND = 44;
+const SPEED = 0.22;
+const PER_SOUL_CREATIONS = 16;     // max LIVE creations per soul (archiving frees the slot)
+const WORLD_CAP = 140;
 const ACT_MIN_MS = 8000, ACT_VAR_MS = 11000;   // 8–19 s between deliberate acts
 const COMMUNE_MS = 7000;            // how long two souls drift together while conversing
 
@@ -71,6 +71,25 @@ const CRAFT: Record<string, string[]> = {
   binah: ["a marble temple", "a crystal tower", "a world of understanding"],
   einsof: ["a glowing doorway", "a crystal tower", "a world without end"],
 };
+// Grand structures each soul raises — varied + archetype-fitting, NEVER a plain
+// small house. The Oracle's words choose the material + write the description.
+const GRAND_PALETTE: Record<string, string[]> = {
+  apollo:     ["a marble temple", "a tall marble column", "a golden tower", "a marble manor"],
+  athena:     ["a stone tower", "a marble temple", "a stone castle", "a tall column"],
+  hephaestus: ["an iron tower", "a stone bridge", "an iron castle", "a bronze temple"],
+  hermes:     ["a stone bridge", "a tall tower", "a marble manor", "a stone column"],
+  iris:       ["a crystal tower", "a stone bridge", "a marble temple", "a tall column"],
+  demeter:    ["a grove of trees", "a stone temple", "a wooden manor", "a tall column"],
+  dionysus:   ["a grove of trees", "a marble temple", "a stone tower", "a wooden manor"],
+  hestia:     ["a wooden manor", "a stone temple", "a tall column", "a stone tower"],
+  ares:       ["a stone castle", "an iron tower", "a stone bridge", "a great tower"],
+  artemis:    ["a grove of trees", "a wooden tower", "a stone bridge", "a tall column"],
+  persephone: ["a dark temple", "a crystal tower", "a stone castle", "a marble column"],
+  themis:     ["a marble temple", "a tall column", "a marble manor", "a stone tower"],
+  chokmah:    ["a crystal tower", "a marble temple", "a tall column", "a crystal manor"],
+  binah:      ["a marble temple", "a crystal tower", "a marble manor", "a stone column"],
+  einsof:     ["a crystal tower", "a marble temple", "a golden manor", "a crystal castle"],
+};
 // Small things a soul will set down (craft / place_object) — by register.
 const SMALL: Record<string, string[]> = {
   scholar: ["a book", "a tall column", "a glowing lantern", "a marble column"],
@@ -97,7 +116,7 @@ interface Soul {
   thought: string; state: string;
   heard: number; thinking: boolean; nextThinkAt: number;
   nextActAt: number; acting: boolean; biome: string;
-  mode: string; partner: string | null; communeUntil: number;
+  mode: string; partner: string | null; communeUntil: number; homeAngle: number;
 }
 
 const souls = new Map<string, Soul>();
@@ -109,9 +128,11 @@ let tick = 0;
 let archivedCount = 0;
 
 function phaseNow(): string { return ["dawn", "morning", "noon", "dusk", "night"][Math.floor((Date.now() / 60000) % 5)]; }
-function wanderTarget(): { x: number; z: number } {
-  const a = (tick * 2.39996 + souls.size * 1.7 + Math.random() * 6.283) % (Math.PI * 2);
-  const r = 6 + Math.abs(Math.sin(tick * 0.31 + souls.size)) * (BOUND - 6);
+// Each soul keeps to its own angular district (homeAngle), so the town spreads
+// into neighborhoods across the whole map instead of clumping at the centre.
+function wanderTargetFor(s: Soul): { x: number; z: number } {
+  const a = s.homeAngle + (Math.random() - 0.5) * 1.1;       // ±~0.55 rad sector
+  const r = 12 + Math.random() * (BOUND - 12);
   return { x: Math.cos(a) * r, z: Math.sin(a) * r };
 }
 function archetypeOf(name: string, given?: string): string {
@@ -124,15 +145,17 @@ function archetypeOf(name: string, given?: string): string {
 function birth(name: string, archetype?: string): void {
   if (souls.has(name)) return;
   const arch = archetypeOf(name, archetype);
-  const t = wanderTarget();
+  const homeAngle = (souls.size * 2.39996) % (Math.PI * 2);   // golden-angle spread around the world
+  const r0 = 14 + Math.random() * (BOUND - 16);
   const s: Soul = {
     id: name, name, archetype: arch, register: REGISTER[arch] || "villager",
-    x: t.x * 0.3, z: t.z * 0.3, facing: "south", tx: t.x, tz: t.z,
+    x: Math.cos(homeAngle) * r0, z: Math.sin(homeAngle) * r0, facing: "south",
+    tx: Math.cos(homeAngle) * r0, tz: Math.sin(homeAngle) * r0,
     thought: "", state: "waking", heard: 0, thinking: false,
     nextThinkAt: Date.now() + Math.random() * THINK_EVERY_MS,
     nextActAt: Date.now() + 12000 + Math.random() * 18000, acting: false,
     biome: BIOMES[souls.size % BIOMES.length],
-    mode: "roam", partner: null, communeUntil: 0,
+    mode: "roam", partner: null, communeUntil: 0, homeAngle,
   };
   souls.set(name, s);
   world.addEntity({ id: name, prototypeId: `${arch}_npc`,
@@ -154,7 +177,7 @@ function roam(id: string): any[] {
     else { s.mode = "roam"; s.partner = null; if (s.state === "communing") s.state = "roaming"; }
   }
   const dx = s.tx - s.x, dz = s.tz - s.z, d = Math.hypot(dx, dz);
-  if (d < 0.4) { if (s.mode !== "commune") { const t = wanderTarget(); s.tx = t.x; s.tz = t.z; } }
+  if (d < 0.4) { if (s.mode !== "commune") { const t = wanderTargetFor(s); s.tx = t.x; s.tz = t.z; } }
   else {
     s.x += (dx / d) * SPEED; s.z += (dz / d) * SPEED;
     s.facing = Math.abs(dx) > Math.abs(dz) ? (dx > 0 ? "east" : "west") : (dz > 0 ? "south" : "north");
@@ -320,14 +343,18 @@ async function craft(s: Soul): Promise<void> {
  *  building AND is kept as its description, so a viewer can read what was made.
  *  Always builds something concrete in the shared world — never a portal. */
 async function build(s: Soul): Promise<void> {
-  const said = await askOracle(s, "what will you build here ?", 32);
+  const said = await askOracle(s, "what grand structure will you raise here ?", 32);
   const low = said.toLowerCase();
+  // Honor the Oracle only when it names a GRAND structure; otherwise raise from
+  // the soul's own palette of halls and towers. House/cottage/hut are NOT in the
+  // override set on purpose — that's what was collapsing everything to a hut.
+  const GRAND = ["temple", "tower", "castle", "manor", "bridge", "column", "grove"];
   let phrase = "";
-  const hit = ARCH.find((k) => low.includes(k));
-  if (hit) phrase = `a ${hit}`;
+  const grandHit = GRAND.find((k) => low.includes(k));
+  if (grandHit) phrase = `a ${grandHit}`;
   else {
-    const pal = (CRAFT[s.archetype] || CRAFT.hestia).filter((p) => !/world/.test(p));
-    phrase = pal[(s.heard + tick) % pal.length] || "a stone tower";
+    const pal = GRAND_PALETTE[s.archetype] || GRAND_PALETTE.hestia;
+    phrase = pal[Math.floor(Math.random() * pal.length)];
   }
   const mat = weaveMaterial(said, phrase);
   const note = said.length > 4 ? said : "";
@@ -342,15 +369,15 @@ async function build(s: Soul): Promise<void> {
 
 /** A more complex build: a hall, ringed by smaller works that belong with it. */
 async function compose(s: Soul): Promise<void> {
-  const said = await askOracle(s, "what will you build here ?", 32);
+  const said = await askOracle(s, "what grand structure will you raise here ?", 32);
   const low = said.toLowerCase();
-  const core = ARCH.find((k) => low.includes(k))
-    || (CRAFT[s.archetype] || CRAFT.hestia).filter((p) => !/world/.test(p))[0].replace(/^an? /, "");
+  const GRAND = ["temple", "tower", "castle", "manor", "bridge", "column", "grove"];
+  const core = GRAND.find((k) => low.includes(k)) || GRAND[Math.floor(Math.random() * GRAND.length)];
   const mat = weaveMaterial(said, core) || ["marble", "stone", "iron", "crystal"][Math.floor(Math.random() * 4)];
   const note = said.length > 4 ? said : "";
   const coreId = spawnBuild(s, `a ${core}`, { mat, note });
   if (!coreId) return;
-  const ring = ["a column", "a column", "a tree", "a column"];   // architectural surroundings, not props
+  const ring = ["a column", "a tree", "a glowing lantern", "a tree"];   // a plaza: a column, greenery, light
   const n = 2 + Math.floor(Math.random() * 3);
   let made = 1;
   for (let i = 0; i < n && built.size < WORLD_CAP && liveCreations(s.name) < PER_SOUL_CREATIONS; i++) {
