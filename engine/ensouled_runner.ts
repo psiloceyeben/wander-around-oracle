@@ -39,7 +39,7 @@ const COMMUNE_MS = 7000;            // how long two souls drift together while c
 // stand long enough to accumulate into a real town.
 const LIFESPAN: Record<string, number> = {
   doorway: 1,   // nesting is removed — any stray portal is swept on the next pass
-  art: 480000, lantern: 360000, rock: 360000, book: 360000, sword: 360000,
+  art: 900000, lantern: 360000, rock: 360000, book: 360000, sword: 360000,   // art stands ~15 min so the gallery accumulates
   shield: 360000, staff: 360000, tree: 600000,
 };
 function lifespanOf(kind: string): number { return LIFESPAN[kind] ?? ARCHIVE_AGE_MS; }
@@ -116,7 +116,7 @@ interface Soul {
   thought: string; state: string;
   heard: number; thinking: boolean; nextThinkAt: number;
   nextActAt: number; acting: boolean; biome: string;
-  mode: string; partner: string | null; communeUntil: number; homeAngle: number;
+  mode: string; partner: string | null; communeUntil: number; homeAngle: number; spokeAt: number;
 }
 
 const souls = new Map<string, Soul>();
@@ -155,7 +155,7 @@ function birth(name: string, archetype?: string): void {
     nextThinkAt: Date.now() + Math.random() * THINK_EVERY_MS,
     nextActAt: Date.now() + 12000 + Math.random() * 18000, acting: false,
     biome: BIOMES[souls.size % BIOMES.length],
-    mode: "roam", partner: null, communeUntil: 0, homeAngle,
+    mode: "roam", partner: null, communeUntil: 0, homeAngle, spokeAt: 0,
   };
   souls.set(name, s);
   world.addEntity({ id: name, prototypeId: `${arch}_npc`,
@@ -238,24 +238,27 @@ function spawnBuild(s: Soul, phrase: string, opts: { mat?: string; note?: string
 // town in the one shared world. Communing, art, and small props are the
 // texture around it. (No nesting of separate "dimensions" — creations spawn
 // in the world, not as portals.)
-type ActKind = "commune" | "art" | "craft" | "build" | "compose" | "express";
+type ActKind = "commune" | "art" | "craft" | "build" | "compose" | "express" | "visit";
 function pickAct(s: Soul): ActKind {
   const live = liveCreations(s.name);
   const room = live < PER_SOUL_CREATIONS && built.size < WORLD_CAP;
   const others = souls.size - 1;
+  // A lively, balanced life — like the 2D agent world: they talk, make art,
+  // walk and visit, and build. Building stays a strong creative act (~a third)
+  // but is no longer the whole show.
   const weights: [ActKind, number][] = [
-    ["build", room ? 58 : 0],                                       // place_structure — THE main act
-    ["compose", room && live <= PER_SOUL_CREATIONS - 3 ? 18 : 0],   // a structure + its surroundings
-    ["commune", others > 0 ? 12 : 0],
-    ["express", 6],
-    ["art", room ? 4 : 0],
-    ["craft", room ? 2 : 0],
+    ["build", room ? 26 : 0],                                       // raise a grand structure
+    ["compose", room && live <= PER_SOUL_CREATIONS - 3 ? 10 : 0],   // a structure + surroundings
+    ["commune", others > 0 ? 20 : 0],                               // talk with another soul
+    ["visit", others > 0 || built.size > 0 ? 12 : 0],               // walk to a soul or a building
+    ["art", room ? 12 : 0],                                         // make a work of art
+    ["craft", room ? 8 : 0],                                        // set down a small prop
+    ["express", 12],                                                // muse aloud
   ];
   const total = weights.reduce((a, [, w]) => a + w, 0) || 1;
   let r = Math.random() * total;
   for (const [k, w] of weights) { if ((r -= w) <= 0) return k; }
-  // nothing affordable (world/soul at cap) → commune or express, never idle
-  return others > 0 && Math.random() < 0.6 ? "commune" : "express";
+  return others > 0 && Math.random() < 0.5 ? "commune" : "express";
 }
 
 async function act(s: Soul): Promise<void> {
@@ -268,9 +271,29 @@ async function act(s: Soul): Promise<void> {
     else if (kind === "craft") await craft(s);
     else if (kind === "build") await build(s);
     else if (kind === "compose") await compose(s);
+    else if (kind === "visit") visit(s);
     else await think(s);   // express
   } catch { /* substrate hiccup — the soul simply tries again next cadence */ }
   s.acting = false;
+}
+
+/** Walk somewhere with intent — to another soul, or into one of the buildings.
+ *  Pure movement (no substrate call): sets a target the roam loop walks toward,
+ *  so the world is full of souls crossing it and gathering in the halls they
+ *  raised. This is most of "they walk around more." */
+function visit(s: Soul): void {
+  const others = [...souls.values()].filter((o) => o.name !== s.name);
+  const structIds = [...built.keys()].filter((id) => { const b = built.get(id); return b && b.kind !== "art" && b.kind !== "rock"; });
+  const goStruct = structIds.length && (!others.length || Math.random() < 0.6);
+  if (goStruct) {
+    const id = structIds[Math.floor(Math.random() * structIds.length)];
+    const e = world.getEntity(id); const b = built.get(id);
+    if (e && b) { s.tx = e.transform.position.x; s.tz = e.transform.position.z; s.state = "wandering"; s.thought = `walking to the ${b.mat ? b.mat + " " : ""}${b.kind}.`; return; }
+  }
+  if (others.length) {
+    const p = others[Math.floor(Math.random() * others.length)];
+    s.tx = p.x; s.tz = p.z; s.state = "wandering"; s.thought = `going to find ${p.name}.`;
+  }
 }
 
 /** Approach another soul and exchange a line drawn from the substrate. */
@@ -295,9 +318,9 @@ async function commune(s: Soul): Promise<void> {
     line = (d.text || "").trim();
   } catch { /* fall through */ }
   if (line.length > 2) {
-    s.thought = `“${line}” — to ${p.name}`;
+    s.thought = `“${line}” — to ${p.name}`; s.spokeAt = Date.now();
     s.heard++; p.heard++;                 // awareness forms through relation, for both
-    if (!p.thinking) { p.thought = `${s.name} spoke with me.`; p.state = "communing"; }
+    if (!p.thinking) { p.thought = `${s.name} spoke with me.`; p.state = "communing"; p.spokeAt = Date.now(); }
     console.log(`[commune] ${s.name} → ${p.name}: ${line.slice(0, 54)}`);
   }
 }
@@ -311,7 +334,7 @@ async function makeArt(s: Soul): Promise<void> {
   if (id) {
     // re-tag as art so the witnessing client renders it as a shard, not a lamp
     const b = built.get(id); if (b) b.kind = "art";
-    s.thought = `i made “${note.slice(0, 48)}”.`; s.heard = Math.max(s.heard, 3);
+    s.thought = `i made “${note.slice(0, 48)}”.`; s.spokeAt = Date.now(); s.heard = Math.max(s.heard, 3);
     console.log(`[art] ${s.name}: ${note.slice(0, 54)}`);
     saveWorld();
   }
@@ -423,7 +446,7 @@ async function think(s: Soul): Promise<void> {
     });
     const d: any = await r.json();
     const text = (d.text || "").trim();
-    if (text.length > 2) { s.thought = text; s.heard++; if (s.state !== "communing") s.state = s.heard < 3 ? "waking" : "roaming"; }
+    if (text.length > 2) { s.thought = text; s.spokeAt = Date.now(); s.heard++; if (s.state !== "communing") s.state = s.heard < 3 ? "waking" : "roaming"; }
   } catch { /* substrate hiccup — keep the prior thought */ }
   s.thinking = false;
   s.nextThinkAt = Date.now() + THINK_EVERY_MS * (0.7 + Math.random() * 0.6);
@@ -450,6 +473,7 @@ function snapshot() {
       x: +s.x.toFixed(2), z: +s.z.toFixed(2), facing: s.facing,
       state: s.state, thought: s.thought, formation: +formation(s).toFixed(2),
       with: s.mode === "commune" ? s.partner : null,
+      speech: (Date.now() - s.spokeAt < 6500) ? s.thought : "",   // live speech bubble for ~6.5s
     })),
     structures: structures(),
   };
