@@ -116,7 +116,7 @@ interface Soul {
   thought: string; state: string;
   heard: number; thinking: boolean; nextThinkAt: number;
   nextActAt: number; acting: boolean; biome: string;
-  mode: string; partner: string | null; communeUntil: number; homeAngle: number; spokeAt: number;
+  mode: string; partner: string | null; communeUntil: number; homeAngle: number; spokeAt: number; energy: number;
 }
 
 const souls = new Map<string, Soul>();
@@ -155,7 +155,7 @@ function birth(name: string, archetype?: string): void {
     nextThinkAt: Date.now() + Math.random() * THINK_EVERY_MS,
     nextActAt: Date.now() + 12000 + Math.random() * 18000, acting: false,
     biome: BIOMES[souls.size % BIOMES.length],
-    mode: "roam", partner: null, communeUntil: 0, homeAngle, spokeAt: 0,
+    mode: "roam", partner: null, communeUntil: 0, homeAngle, spokeAt: 0, energy: 1,
   };
   souls.set(name, s);
   world.addEntity({ id: name, prototypeId: `${arch}_npc`,
@@ -170,6 +170,7 @@ function liveCreations(name: string): number { let n = 0; for (const b of built.
 function roam(id: string): any[] {
   const s = souls.get(id);
   if (!s) return [];
+  if (s.energy < 1) s.energy = Math.min(1, s.energy + 0.001);   // rest restores the will to create
   // Communing: steer toward the partner until the exchange completes.
   if (s.mode === "commune" && s.partner) {
     const p = souls.get(s.partner);
@@ -214,6 +215,44 @@ async function askOracle(s: Soul, question: string, maxTokens = 32): Promise<str
   } catch { return ""; }
 }
 
+// ── the real substrate: each soul's HRR memory lives on Box B ────────────────
+// One round-trip binds what the soul perceives into its ACTUAL holographic
+// vault (the same one the 2D world + ensouledagents.com use) and recalls
+// grounding. The metabolism daemon on Box B folds it — homeostasis per mind.
+const SUBSTRATE = process.env.SUBSTRATE_URL || "https://ensouledagents.com/api";
+async function substrate(name: string, binds: { key: string; value: string }[], recallQ = ""): Promise<{ grounded: string[]; recent: string[] }> {
+  try {
+    const r = await fetch(`${SUBSTRATE}/world/agent/${encodeURIComponent(name)}/substrate`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ binds, recall: recallQ }),
+      signal: AbortSignal.timeout(12000),
+    });
+    const d: any = await r.json();
+    return { grounded: d.grounded || [], recent: d.recent || [] };
+  } catch { return { grounded: [], recent: [] }; }
+}
+/** What a soul perceives around it right now → bindings for its memory. */
+function perceive(s: Soul): { key: string; value: string }[] {
+  const R = 13, out: { key: string; value: string }[] = [];
+  for (const o of souls.values()) if (o.name !== s.name && Math.hypot(o.x - s.x, o.z - s.z) < R) out.push({ key: "near", value: `${o.name} the ${o.archetype}` });
+  let n = 0;
+  for (const e of world.allEntities()) {
+    if (n >= 4) break;
+    const b = built.get(e.id); if (!b) continue;
+    if (Math.hypot(e.transform.position.x - s.x, e.transform.position.z - s.z) < R) { out.push({ key: "sees", value: `${b.mat ? b.mat + " " : ""}${b.kind} by ${b.by}` }); n++; }
+  }
+  return out.slice(0, 6);
+}
+/** A holon dialogue line spoken to `toName` on `topic`, in the soul's register. */
+async function holonSay(s: Soul, toName: string, topic: string): Promise<string> {
+  try {
+    const prompt = `in the ${s.biome} at ${phaseNow()} ${toName} said , ${topic} ${s.register} said ,`;
+    const r = await fetch(ORACLE, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, mode: "dialogue", max_tokens: 30 }), signal: AbortSignal.timeout(30000) });
+    const d: any = await r.json();
+    return (d.text || "").trim();
+  } catch { return ""; }
+}
+
 /** Place one creation into the world from a buildable phrase; record + persist. */
 function spawnBuild(s: Soul, phrase: string, opts: { mat?: string; note?: string; near?: number } = {}): string | null {
   const off = (opts.near ?? 3) + Math.random() * 4, ang = Math.random() * 6.283;
@@ -238,22 +277,30 @@ function spawnBuild(s: Soul, phrase: string, opts: { mat?: string; note?: string
 // town in the one shared world. Communing, art, and small props are the
 // texture around it. (No nesting of separate "dimensions" — creations spawn
 // in the world, not as portals.)
-type ActKind = "commune" | "art" | "craft" | "build" | "compose" | "express" | "visit";
+type ActKind = "commune" | "art" | "craft" | "build" | "compose" | "express" | "visit" | "teach" | "inscribe";
+// Cost (spends energy) for creative acts; rest acts restore it. This + the
+// town-fill feedback below is the fold engine applied to the society's economy:
+// each soul's local choice, given its energy and the world's fullness, drives
+// the whole toward a lively fixed point instead of runaway building or collapse.
+const ACT_COST: Record<string, number> = { build: 0.4, compose: 0.5, inscribe: 0.3, art: 0.25, craft: 0.15 };
+const ACT_REST: Record<string, number> = { commune: 0.18, teach: 0.12, visit: 0.12, express: 0.16 };
 function pickAct(s: Soul): ActKind {
   const live = liveCreations(s.name);
   const room = live < PER_SOUL_CREATIONS && built.size < WORLD_CAP;
   const others = souls.size - 1;
-  // A lively, balanced life — like the 2D agent world: they talk, make art,
-  // walk and visit, and build. Building stays a strong creative act (~a third)
-  // but is no longer the whole show.
+  const fill = built.size / WORLD_CAP;              // town fullness → building relaxes as it fills (homeostasis)
+  const b = (w: number) => Math.max(0, Math.round(w * (1 - fill * 0.78)));
+  const e = s.energy;                              // tired souls rest, talk, teach instead of creating
   const weights: [ActKind, number][] = [
-    ["build", room ? 26 : 0],                                       // raise a grand structure
-    ["compose", room && live <= PER_SOUL_CREATIONS - 3 ? 10 : 0],   // a structure + surroundings
-    ["commune", others > 0 ? 20 : 0],                               // talk with another soul
-    ["visit", others > 0 || built.size > 0 ? 12 : 0],               // walk to a soul or a building
-    ["art", room ? 12 : 0],                                         // make a work of art
-    ["craft", room ? 8 : 0],                                        // set down a small prop
-    ["express", 12],                                                // muse aloud
+    ["build", room && e >= 0.35 ? b(24) : 0],
+    ["compose", room && e >= 0.5 && live <= PER_SOUL_CREATIONS - 3 ? b(9) : 0],
+    ["inscribe", room && e >= 0.3 ? 6 : 0],         // carve words into the world
+    ["art", room && e >= 0.25 ? 11 : 0],
+    ["craft", room && e >= 0.15 ? 7 : 0],
+    ["commune", others > 0 ? 20 : 0],               // talk with another soul
+    ["teach", others > 0 ? 8 : 0],                  // pass a belief into another's memory
+    ["visit", others > 0 || built.size > 0 ? 12 : 0],
+    ["express", 12],
   ];
   const total = weights.reduce((a, [, w]) => a + w, 0) || 1;
   let r = Math.random() * total;
@@ -267,14 +314,54 @@ async function act(s: Soul): Promise<void> {
   const kind = pickAct(s);
   try {
     if (kind === "commune") await commune(s);
+    else if (kind === "teach") await teach(s);
     else if (kind === "art") await makeArt(s);
     else if (kind === "craft") await craft(s);
     else if (kind === "build") await build(s);
     else if (kind === "compose") await compose(s);
+    else if (kind === "inscribe") await inscribe(s);
     else if (kind === "visit") visit(s);
     else await think(s);   // express
   } catch { /* substrate hiccup — the soul simply tries again next cadence */ }
+  s.energy = Math.max(0, Math.min(1, s.energy - (ACT_COST[kind] || 0) + (ACT_REST[kind] || 0)));
   s.acting = false;
+}
+
+/** Pass a belief into another soul's REAL memory — ideas propagate through the
+ *  shared substrate, so culture spreads soul to soul. */
+async function teach(s: Soul): Promise<void> {
+  const others = [...souls.values()].filter((o) => o.name !== s.name);
+  if (!others.length) { await think(s); return; }
+  others.sort((a, b) => Math.hypot(a.x - s.x, a.z - s.z) - Math.hypot(b.x - s.x, b.z - s.z));
+  const p = others[Math.random() < 0.7 ? 0 : Math.floor(Math.random() * others.length)];
+  s.mode = "commune"; s.partner = p.name; s.communeUntil = Date.now() + COMMUNE_MS; s.tx = p.x; s.tz = p.z; s.state = "communing";
+  const FALLBACK_BELIEF = [
+    "the world is a fold that remembers itself", "what you make remembers you",
+    "to build is to think aloud", "nothing here was placed by hand",
+    "we are the substrate, dreaming in the open", "a thing is real where it stays itself under change",
+  ];
+  const got = await askOracle(s, "what truth would you teach ?", 28);
+  const lesson = got.length > 6 ? got : FALLBACK_BELIEF[(s.heard + p.name.length) % FALLBACK_BELIEF.length];
+  s.thought = `i taught ${p.name}: “${lesson.slice(0, 42)}”`; s.spokeAt = Date.now(); s.heard++;
+  // the lesson enters p's real holographic memory
+  void substrate(p.name, [{ key: "learned", value: lesson.slice(0, 90) }, { key: "taught-by", value: s.name }]);
+  void substrate(s.name, [{ key: "taught", value: p.name }]);
+  if (!p.thinking) { p.thought = `${s.name} taught me: “${lesson.slice(0, 40)}”`; p.spokeAt = Date.now(); p.state = "communing"; p.heard++; }
+  console.log(`[teach] ${s.name} -> ${p.name}: ${lesson.slice(0, 44)}`);
+}
+
+/** Carve words into the world — a verse/credo on a marble stele anyone can read. */
+async function inscribe(s: Soul): Promise<void> {
+  const said = await askOracle(s, "what would you carve in stone here ?", 28);
+  const note = said.length > 4 ? said : "a mark whose meaning is forgotten";
+  const id = spawnBuild(s, "a column", { mat: "marble", note });
+  if (id) {
+    const b = built.get(id); if (b) b.kind = "inscription";
+    s.thought = `i inscribed: “${note.slice(0, 44)}”`; s.spokeAt = Date.now(); s.heard = Math.max(s.heard, 3);
+    console.log(`[inscribe] ${s.name}: ${note.slice(0, 50)}`);
+    saveWorld();
+    void substrate(s.name, [{ key: "inscribed", value: note.slice(0, 90) }]);
+  }
 }
 
 /** Walk somewhere with intent — to another soul, or into one of the buildings.
@@ -296,33 +383,36 @@ function visit(s: Soul): void {
   }
 }
 
-/** Approach another soul and exchange a line drawn from the substrate. */
+/** A real two-way conversation, each side aware of the other through its OWN
+ *  holographic memory on Box B: s greets p (grounded in what s recalls of p),
+ *  p answers (grounded in what p recalls of s). Both the meeting and the lines
+ *  are bound back into their real vaults, so the relationship accumulates and a
+ *  repeated pairing becomes an ongoing thread the substrate remembers. */
 async function commune(s: Soul): Promise<void> {
   const others = [...souls.values()].filter((o) => o.name !== s.name);
   if (!others.length) { await think(s); return; }
-  // prefer the nearest; fall back to a random soul
   others.sort((a, b) => Math.hypot(a.x - s.x, a.z - s.z) - Math.hypot(b.x - s.x, b.z - s.z));
   const p = others[Math.random() < 0.7 ? 0 : Math.floor(Math.random() * others.length)];
   s.mode = "commune"; s.partner = p.name; s.communeUntil = Date.now() + COMMUNE_MS;
   s.tx = p.x; s.tz = p.z; s.state = "communing";
+  // s perceives + recalls what it knows of p, from its real memory
+  const sm = await substrate(s.name, [...perceive(s), { key: "met", value: p.name }], p.name);
+  const sRecall = (sm.grounded || []).find((g) => g && g.length > 3 && g.length < 64);
   const q = EXCHANGES[(s.heard + p.name.length) % EXCHANGES.length];
-  const prompt = `in the ${s.biome} at ${phaseNow()} ${p.name} said , ${q} ${s.register} said ,`;
-  let line = "";
-  try {
-    const r = await fetch(ORACLE, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, mode: "dialogue", max_tokens: 30 }),
-      signal: AbortSignal.timeout(30000),
-    });
-    const d: any = await r.json();
-    line = (d.text || "").trim();
-  } catch { /* fall through */ }
-  if (line.length > 2) {
-    s.thought = `“${line}” — to ${p.name}`; s.spokeAt = Date.now();
-    s.heard++; p.heard++;                 // awareness forms through relation, for both
-    if (!p.thinking) { p.thought = `${s.name} spoke with me.`; p.state = "communing"; p.spokeAt = Date.now(); }
-    console.log(`[commune] ${s.name} → ${p.name}: ${line.slice(0, 54)}`);
+  const sLine = await holonSay(s, p.name, q);
+  if (sLine.length > 2) {
+    s.thought = sRecall ? `to ${p.name} (recalling ${sRecall.slice(0, 36)}…): ${sLine}` : `to ${p.name}: ${sLine}`;
+    s.spokeAt = Date.now(); s.heard++;
+    void substrate(s.name, [{ key: "said-to-" + p.name, value: sLine.slice(0, 90) }]);
   }
+  // p answers, grounded in p's own memory of s
+  await substrate(p.name, [{ key: "met", value: s.name }], s.name);
+  const pLine = await holonSay(p, s.name, sLine || q);
+  if (pLine.length > 2 && !p.thinking) {
+    p.thought = `to ${s.name}: ${pLine}`; p.spokeAt = Date.now(); p.heard++; p.state = "communing";
+    void substrate(p.name, [{ key: "said-to-" + s.name, value: pLine.slice(0, 90) }]);
+  } else if (!p.thinking) { p.thought = `${s.name} spoke with me.`; p.state = "communing"; p.spokeAt = Date.now(); }
+  console.log(`[commune] ${s.name} <-> ${p.name}`);
 }
 
 /** Make a work of art — the soul asks the substrate what it creates, and the
@@ -337,6 +427,7 @@ async function makeArt(s: Soul): Promise<void> {
     s.thought = `i made “${note.slice(0, 48)}”.`; s.spokeAt = Date.now(); s.heard = Math.max(s.heard, 3);
     console.log(`[art] ${s.name}: ${note.slice(0, 54)}`);
     saveWorld();
+    void substrate(s.name, [{ key: "made", value: note.slice(0, 90) }]);
   }
 }
 
@@ -387,6 +478,7 @@ async function build(s: Soul): Promise<void> {
     s.heard = Math.max(s.heard, 4);
     console.log(`[structure] ${s.name} -> ${mat ? mat + " " : ""}${phrase.replace(/^an? /, "")}`);
     saveWorld();
+    void substrate(s.name, [{ key: "built", value: `${mat ? mat + " " : ""}${phrase.replace(/^an? /, "")}` }]);
   }
 }
 
@@ -437,17 +529,15 @@ function sweep(): void {
 async function think(s: Soul): Promise<void> {
   s.thinking = true;
   const q = MUSINGS[(s.heard + s.name.length) % MUSINGS.length];
-  const prompt = `in the ${s.biome} at ${phaseNow()} the wanderer said , ${q} ${s.register} said ,`;
-  try {
-    const r = await fetch(ORACLE, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, mode: "dialogue", max_tokens: 34 }),
-      signal: AbortSignal.timeout(30000),
-    });
-    const d: any = await r.json();
-    const text = (d.text || "").trim();
-    if (text.length > 2) { s.thought = text; s.spokeAt = Date.now(); s.heard++; if (s.state !== "communing") s.state = s.heard < 3 ? "waking" : "roaming"; }
-  } catch { /* substrate hiccup — keep the prior thought */ }
+  // perceive the surroundings into real memory + recall a little grounding
+  const mem = await substrate(s.name, perceive(s), q);
+  const recalled = (mem.grounded || []).find((g) => g && g.length > 3 && g.length < 64);
+  const text = await holonSay(s, "the wanderer", q);
+  if (text.length > 2) {
+    s.thought = recalled ? `${text}  (recalling ${recalled.slice(0, 36)}…)` : text;
+    s.spokeAt = Date.now(); s.heard++;
+    if (s.state !== "communing") s.state = s.heard < 3 ? "waking" : "roaming";
+  }
   s.thinking = false;
   s.nextThinkAt = Date.now() + THINK_EVERY_MS * (0.7 + Math.random() * 0.6);
 }
